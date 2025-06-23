@@ -1,0 +1,98 @@
+version: "3.8"
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - app-network
+
+  # Redis for Celery broker
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  # FastAPI Application
+  api:
+    build: .
+    container_name: fastapi-app
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://admin:password@mongodb:27017/
+      - REDIS_URL=redis://redis:6379/0
+      - VENDOR_SYNC_URL=http://vendor-sync:8001
+      - VENDOR_ASYNC_URL=http://vendor-async:8002
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - app-network
+    volumes:
+      - ./app:/app
+
+  # Celery Worker
+  worker:
+    build: .
+    container_name: celery-worker
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      - MONGODB_URL=mongodb://admin:password@mongodb:27017/
+      - REDIS_URL=redis://redis:6379/0
+      - VENDOR_SYNC_URL=http://vendor-sync:8001
+      - VENDOR_ASYNC_URL=http://vendor-async:8002
+    depends_on:
+      - mongodb
+      - redis
+      - api
+    networks:
+      - app-network
+    volumes:
+      - ./app:/app
+
+  # Mock Synchronous Vendor
+  vendor-sync:
+    build: .
+    container_name: vendor-sync
+    command: python -m app.mock_vendors.sync_vendor
+    ports:
+      - "8001:8001"
+    environment:
+      - RATE_LIMIT_PER_MINUTE=30
+    networks:
+      - app-network
+    volumes:
+      - ./app:/app
+
+  # Mock Asynchronous Vendor
+  vendor-async:
+    build: .
+    container_name: vendor-async
+    command: python -m app.mock_vendors.async_vendor
+    ports:
+      - "8002:8002"
+    environment:
+      - RATE_LIMIT_PER_MINUTE=20
+    networks:
+      - app-network
+    volumes:
+      - ./app:/app
+
+volumes:
+  mongodb_data:
+
+networks:
+  app-network:
+    driver: bridge
